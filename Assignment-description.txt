@@ -1,0 +1,565 @@
+\documentclass{article}
+
+%% Useful packages
+\usepackage{graphicx} % Required for inserting images
+\usepackage{fullpage,enumitem,amsmath,amssymb,url,hyperref}
+\usepackage{sectsty}
+\usepackage{tgpagella}
+\usepackage{tcolorbox}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage[skip=10pt plus1pt, indent=0pt]{parskip}
+\usepackage[edges]{forest} % file structure
+\usepackage{cleveref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+}
+
+%% Title formatting
+\makeatletter
+\def\@maketitle{%
+  \newpage
+  \null
+  \begin{center}%
+  \let \footnote \thanks
+    {\LARGE {\@title}\par}%
+    {\@author}%
+  \end{center}%
+  \par
+}
+\makeatother
+
+%% Useful math variables
+% Random variables
+\def\ra{{\textnormal{a}}}
+\def\rs{{\textnormal{s}}}
+
+% Random vectors
+\def\rva{{\mathbf{a}}}
+\def\rvs{{\mathbf{s}}}
+
+% Elements of random vectors
+\def\erva{{\textnormal{a}}}
+\def\ervs{{\textnormal{s}}}
+
+% Vectors
+\def\vzero{{\bm{0}}}
+\def\vone{{\bm{1}}}
+\def\vmu{{\bm{\mu}}}
+\def\vtheta{{\bm{\theta}}}
+\def\va{{\bm{a}}}
+\def\vs{{\bm{s}}}
+
+
+
+\title{CAS4160 Homework 2: Policy Gradients}
+
+%% TODO: Replace {\textbf{\color{red} ...}} with your name and student ID
+\author{
+    {\textbf{Kyeongwoo Lee} \\
+    {\textbf{2021147505}
+}
+
+
+\begin{document}
+
+\maketitle
+
+
+\section{Introduction}
+
+The goal of this assignment is to help you understand \textbf{Policy Gradient Methods}, including variance reduction tricks, such as reward-to-go, neural network baselines, and Generalized Advantage Estimator (GAE). Finally, you will implement Proximal Policy Optimization (PPO), a widely used on-policy RL algorithm that works very well in practice. Here is the link to \href{https://www.overleaf.com/read/xtwbvpnqgxrn#0fb229}{this homework report template in Overleaf}.
+
+
+\section{Review}
+
+\subsection{Policy Gradient}
+Recall that the reinforcement learning objective is to learn $\theta^{*}$ that maximizes the objective function:
+\begin{equation}
+    J(\theta)=\mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}[r(\tau)],
+\end{equation}
+where each rollout $\tau$ is of length $T$, as follows:
+\begin{equation*}
+    \pi_\theta(\tau) = p\left(\rvs_0, \rva_0, \ldots, \rvs_{T-1}, \rva_{T-1}, \rvs_T \right) = p\left(\rvs_0\right) \prod_{t=0}^{T-1} \pi_\theta\left(\rva_t \mid \rvs_t \right) p\left(\rvs_{t+1} \mid \rvs_{t}, \rva_{t}\right),
+\end{equation*}
+and
+\begin{equation*}
+    r(\tau)=r\left(\rvs_0, \rva_0, \ldots, \rvs_{T-1}, \rva_{T-1}\right) = \sum_{t=0}^{T-1} r\left(\rvs_t, \rva_t\right).
+\end{equation*}
+\textbf{Note:} In this assignment, $t$ starts from $0$, not from $1$, which is easier to implement.
+
+The policy gradient approach is to directly take the gradient of this objective:
+\begin{align*}
+    \nabla_{\theta} J(\theta) & = \nabla_{\theta} \mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}[r(\tau)] & \\
+                                & =\nabla_{\theta} \int \pi_{\theta}(\tau) r(\tau) d \tau &  \\
+                                & =\int \pi_{\theta}(\tau) \nabla_{\theta} \log \pi_{\theta}(\tau) r(\tau) d \tau & (\because \nabla_\theta \pi_\theta(\tau) = \pi_\theta(\tau) \nabla_\theta \log \pi_\theta(\tau)) \\
+                                & =\mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}\left[\nabla_{\theta} \log \pi_{\theta}(\tau) r(\tau)\right]. & 
+\end{align*}
+
+
+In practice, the expectation over trajectories $\tau$ can be approximated from a batch of $N$ sampled trajectories:
+\begin{align}
+    \nabla_{\theta} J(\theta) & \approx \frac{1}{N} \sum_{i=1}^{N} \nabla_{\theta} \log \pi_{\theta}\left(\tau_{i}\right) r\left(\tau_{i}\right) \nonumber \\
+                                & =\frac{1}{N} \sum_{i=1}^{N}\left(\sum_{t=0}^{T-1} \nabla_{\theta} \log \pi_{\theta}\left(\rva_{i t} \mid \rvs_{i t}\right)\right)\left(\sum_{t=0}^{T-1} r\left(\rvs_{i t}, \rva_{i t}\right)\right). \label{eq:pg}
+\end{align}
+
+
+Here, we see that the policy $\pi_{\theta}$ is a probability distribution over the action space, conditioned on the state. In the agent-environment loop, the agent samples an action $\rva_{t}$ from $\pi_{\theta}\left(\cdot \mid \rvs_{t}\right)$ and the environment responds with a reward $r\left(\rvs_{t}, \rva_{t}\right)$.
+
+
+\subsection{Variance Reduction}
+
+\subsubsection{Reward-to-go}
+
+One way to reduce the variance of the policy gradient is to exploit causality: the notion that the policy cannot affect the rewards in the past. This yields the following modified objective, where the sum of rewards here does not include the rewards achieved prior to the time step at which the policy is being queried. This sum of rewards is a sample estimate of the $Q$ function, and is referred to as the ``reward-to-go'':
+\begin{equation} \label{eq:pg_rtg}
+    \nabla_{\theta} J(\theta) \approx \frac{1}{N} \sum_{i=1}^{N} \sum_{t=0}^{T-1} \nabla_{\theta} \log \pi_{\theta}\left(\rva_{i t} \mid \rvs_{i t}\right)
+    \underbrace{\left(
+    \sum_{t^{\prime}=t}^{T-1} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right)
+    \right)}_\textrm{reward-to-go}.
+\end{equation}
+
+
+\subsubsection{Discounting}
+
+Multiplying a discount factor $\gamma$ to the rewards can be interpreted as encouraging the agent to focus more on the rewards that are closer in time, and less on the rewards that are further in the future. This can also be thought of as a means for reducing variance as there can be more variance and uncertainty when considering faraway futures.
+
+We can apply the discount on the rewards from full trajectory in \Cref{eq:pg}:
+\begin{equation} \label{eq:pg_discount}
+    \nabla_{\theta} J(\theta) \approx \frac{1}{N} \sum_{i=1}^{N}\left(\sum_{t=0}^{T-1} \nabla_{\theta} \log \pi_{\theta}\left(\rva_{i t} \mid \rvs_{i t}\right)\right)\left(\sum_{t^{\prime}=0}^{T-1} \gamma^{t^{\prime}-1} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right)\right).
+\end{equation}
+
+We can also apply the discount on the ``reward-to-go'' in \Cref{eq:pg_rtg}:
+\begin{equation} \label{eq:pg_rtg_discount}
+    \nabla_{\theta} J(\theta) \approx \frac{1}{N} \sum_{i=1}^{N} \sum_{t=0}^{T-1} \nabla_{\theta} \log \pi_{\theta}\left(\rva_{i t} \mid \rvs_{i t}\right)\left(\sum_{t^{\prime}=t}^{T-1} \gamma^{t^{\prime}-t} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right)\right).
+\end{equation}
+
+
+\subsubsection{Baseline}
+
+Another variance reduction method is to subtract a baseline (that is only conditioned on the current state $\rvs_t$) from the sum of rewards:
+\begin{equation}
+    \nabla_{\theta} J(\theta)=\mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}\left[\sum_{t=0}^{T-1} \nabla_{\theta} \log \pi_\theta(\rva_t \mid \rvs_t) [r(\tau)-b(\rvs_t)]\right].
+\end{equation}
+This leaves the policy gradient unbiased because
+\begin{align*}
+    \mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}[\nabla_{\theta} \log \pi_\theta(\rva_t \mid \rvs_t) b(\rvs_t)] 
+            &= \mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}[\nabla_{\theta} \log \pi_\theta(\rva_t \mid \rvs_t)] \mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}[b(\rvs_t)] \\
+            &= 0 \cdot \mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}[b(\rvs_t)] = 0.
+\end{align*}
+
+In this assignment, we will implement a value function $V_{\phi}^{\pi}(\rvs_t)$, which acts as a state-dependent baseline. This value function will be trained to approximate the sum of future rewards starting from a particular state:
+\begin{equation}
+    V_{\phi}^{\pi}\left(\rvs_{t}\right) \approx \sum_{t^{\prime}=t}^{T-1} \mathbb{E}_{\tau \sim \pi_{\theta}(\tau)}\left[r\left(\rvs_{t^{\prime}}, \rva_{t^{\prime}}\right) \mid \rvs_{t}\right].
+\end{equation}
+Then, the approximate policy gradient now looks like this:
+\begin{equation}
+    \nabla_{\theta} J(\theta) \approx \frac{1}{N} \sum_{i=1}^{N} \sum_{t=0}^{T-1} \nabla_{\theta} \log \pi_{\theta}\left(\rva_{i t} \mid \rvs_{i t}\right)\left(
+        \underbrace{\left(\sum_{t^{\prime}=t}^{T-1} \gamma^{t^{\prime}-t} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right)
+    \right)}_\textrm{reward-to-go}
+    -
+    \underbrace{V_{\phi}^{\pi}\left(\rvs_{i t}\right)}_\textrm{baseline}\right).
+\end{equation}
+
+
+\subsubsection{Generalized Advantage Estimator (GAE)}
+
+The quantity $\left(\sum_{t^{\prime}=t}^{T-1} \gamma^{t^{\prime}-t} r\left(\rvs_{t^{\prime}}, \rva_{t^{\prime}}\right)\right)-V_{\phi}^{\pi}\left(\rvs_{t}\right)$ from the previous policy gradient expression (removing the index $i$ for clarity) can be interpreted as an estimate of the advantage function:
+\begin{equation}
+    A^{\pi}\left(\rvs_{t}, \rva_{t}\right)=Q^{\pi}\left(\rvs_{t}, \rva_{t}\right)-V^{\pi}\left(\rvs_{t}\right),
+\end{equation}
+where $Q^{\pi}\left(\rvs_{t}, \rva_{t}\right)$ is estimated using Monte Carlo returns and $V^{\pi}\left(\rvs_{t}\right)$ is estimated using the learned value function $V_{\phi}^{\pi}$. We can further reduce variance by also using $V_{\phi}^{\pi}$ in place of the Monte Carlo returns to estimate the advantage function as:
+\begin{equation}
+    A^{\pi}\left(\rvs_{t}, \rva_{t}\right) \approx \delta_{t}=r\left(\rvs_{t}, \rva_{t}\right)+\gamma V_{\phi}^{\pi}\left(\rvs_{t+1}\right)-V_{\phi}^{\pi}\left(\rvs_{t}\right),
+\end{equation}
+with the edge case $\delta_{T-1}=r\left(\rvs_{T-1}, \rva_{T-1}\right)-V_{\phi}^{\pi}\left(\rvs_{T-1}\right)$. However, this comes at the cost of introducing bias to our policy gradient estimate, due to modeling errors in $V_{\phi}^{\pi}$. We can instead use a combination of $n$-step Monte Carlo returns and $V_{\phi}^{\pi}$ to estimate the advantage function as:
+\begin{equation}
+    A_{n}^{\pi}\left(\rvs_{t}, \rva_{t}\right)=\sum_{t^{\prime}=t}^{t+n} \gamma^{t^{\prime}-t} r\left(\rvs_{t^{\prime}}, \rva_{t^{\prime}}\right)+\gamma^{n} V_{\phi}^{\pi}\left(\rvs_{t+n+1}\right)-V_{\phi}^{\pi}\left(\rvs_{t}\right).
+\end{equation}
+
+
+Increasing $n$ incorporates the Monte Carlo returns more heavily in the advantage estimate, which lowers bias and increases variance, while decreasing $n$ does the opposite. Note that $n=T-t-1$ recovers the unbiased but higher variance Monte Carlo advantage estimate used in (13), while $n=0$ recovers the lower variance but higher bias advantage estimate $\delta_{t}$.
+
+We can combine multiple $n$-step advantage estimates as an exponentially weighted average, which is known as the generalized advantage estimator (GAE). Let $\lambda \in[0,1]$. Then, we define:
+\begin{equation}
+    A_{GAE}^{\pi}\left(\rvs_{t}, \rva_{t}\right)=\frac{1-\lambda^{T-t-1}}{1-\lambda} \sum_{n=1}^{T-t-1} \lambda^{n-1} A_{n}^{\pi}\left(\rvs_{t}, \rva_{t}\right),
+\end{equation}
+where $\frac{1-\lambda^{T-t-1}}{1-\lambda}$ is a normalizing constant. Note that a higher $\lambda$ emphasizes advantage estimates with higher values of $n$, and a lower $\lambda$ does the opposite. Thus, $\lambda$ serves as a control for the bias-variance tradeoff, where increasing $\lambda$ decreases bias and increases variance. In the infinite horizon case $(T=\infty)$, we can show:
+\begin{align*}
+    A_{GAE}^{\pi}\left(\rvs_{t}, \rva_{t}\right) & =\frac{1}{1-\lambda} \sum_{n=1}^{\infty} \lambda^{n-1} A_{n}^{\pi}\left(\rvs_{t}, \rva_{t}\right) \\
+& =\sum_{t^{\prime}=t}^{\infty}(\gamma \lambda)^{t^{\prime}-t} \delta_{t^{\prime}},
+\end{align*}
+where we have omitted the derivation for brevity (see the \href{https://arxiv.org/pdf/1506.02438.pdf}{GAE paper} for details). In the finite horizon case, we can write:
+\begin{equation}
+    A_{GAE}^{\pi}\left(\rvs_{t}, \rva_{t}\right)=\sum_{t^{\prime}=t}^{T-1}(\gamma \lambda)^{t^{\prime}-t} \delta_{t^{\prime}},
+\end{equation}
+which serves as a way we can efficiently implement the generalized advantage estimator, since we can recursively compute:
+\begin{equation}
+    A_{GAE}^{\pi}\left(\rvs_{t}, \rva_{t}\right)=\delta_{t}+\gamma \lambda A_{GAE}^{\pi}\left(\rvs_{t+1}, \rva_{t+1}\right)
+\end{equation}
+
+
+\section{Code Structure Overview}
+
+The training begins with the script \texttt{run\_hw2.py}. This script contains the function \texttt{run\_training\_loop}, where the training, evaluation, and logging happens.
+
+The agent, also defined in \texttt{run\_hw2.py}, is an instance of \texttt{PGAgent} in \texttt{cas4160/agents/pg\_agent.py}. The \texttt{PGAgent} class has two main networks as its variables:
+\begin{itemize}
+    \item \textbf{actor} network: \texttt{MLPPolicyPG} in \texttt{cas4160/networks/policies.py}, takes as input observations and outputs actions.
+    \item \textbf{critic} network: \texttt{ValueCritic} in \texttt{cas4160/networks/critics.py}, also takes as input observations but outputs value estimates. You will need to implement this in \Cref{sec:nn_baseline}.
+\end{itemize}
+
+The training iteration begins with sampling trajectories using \texttt{sample\_trajectories()} defined in \linebreak \texttt{infrastructure/utils.py} and updating the agent via \texttt{PGAgent.update()} in \texttt{agents/pg\_agent.py}. 
+
+In this \texttt{update()} procedure, \texttt{PGAgent} first processes rewards into Q-values (\texttt{PGAgent.\_calculate\_q\_vals()}) and then, estimates advantages (\texttt{PGAgent.\_estimate\_advantage()}). Then, the actor and the critic are updated via \texttt{MLPPolicyPG.update()} in \texttt{cas4160/networks/policies.py} and \texttt{ValueCritic.update()} in \texttt{cas4160/networks/critics.py}, respectively. If the \texttt{--use\_ppo} flag is set, the \texttt{MLPPolicyPG.ppo\_update()} method is used instead of the standard \texttt{MLPPolicyPG.update()} method for the actor. You will work on the \texttt{MLPPolicyPG.ppo\_update()} method in \Cref{sec:ppo}.
+
+
+\section{Policy Gradients}
+\label{sec:policy_gradient}
+
+\subsection{Implementation}
+
+You will be implementing two different return estimators within \texttt{pg\_agent.py}. Note that these differ only by the starting point of the summation.
+
+The first (``Case 1'' within \texttt{PGAgent.\_calculate\_q\_vals()}) uses the discounted cumulative return of the full trajectory and corresponds to the ``vanilla'' form of the policy gradient (\Cref{eq:pg}):
+\begin{equation}
+    r\left(\tau_{i}\right)=\sum_{t^{\prime}=0}^{T-1} \gamma^{t^{\prime}} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right).
+\end{equation}
+
+The second ("Case 2") uses the ``reward-to-go'' formulation from \Cref{eq:pg_rtg}:
+\begin{equation}
+    r\left(\tau_{i}\right)=\sum_{t^{\prime}=t}^{T-1} \gamma^{t^{\prime}-t} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right).
+\end{equation}
+
+Implement these return estimators as well as the remaining sections marked TODO in the code. For the small-scale experiments, you may skip the parts that are run only if \textbf{nn\_baseline is True}; we will return to baselines (\texttt{MLPPolicyPG.update()} and \texttt{PGAgent.\_estimate\_advantage()}) in \Cref{sec:nn_baseline}.
+
+
+\subsection{Experiments}
+\textbf{Experiment 1 (CartPole).} Run multiple experiments with the PG algorithm on the discrete \texttt{CartPole-v0} environment, using the following commands:
+
+\begin{tcolorbox}[colback=red!5!white,colframe=red!75!black]
+    \begin{verbatim}
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 \
+    --exp_name cartpole
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 \
+    -rtg --exp_name cartpole_rtg
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 \
+    -na --exp_name cartpole_na
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 1000 \
+    -rtg -na --exp_name cartpole_rtg_na
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 \
+    --exp_name cartpole_lb
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 \
+    -rtg --exp_name cartpole_lb_rtg
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 \
+    -na --exp_name cartpole_lb_na
+
+python cas4160/scripts/run_hw2.py --env_name CartPole-v0 -n 100 -b 4000 \
+    -rtg -na --exp_name cartpole_lb_rtg_na
+    \end{verbatim}
+\end{tcolorbox}
+
+Here, each argument specifies:
+\begin{itemize}
+    \item \texttt{-n} : Number of iterations.
+    \item \texttt{-b} : Batch size (number of state-action pairs sampled while acting according to the current policy at each iteration).
+    \item -rtg : Flag: if present, sets \texttt{reward\_to\_go=True}. Otherwise, \texttt{reward\_to\_go=False} by default.
+    \item -na : Flag: if present, sets \texttt{normalize\_advantages=True}, normalizing the advantages to have a mean of zero and standard deviation of one within a batch.
+    \item --exp\_name : Name for experiment, which goes into the name for the data logging directory. If your run succeeds, you will be able to find your tensorboard log data in \\ \texttt{hw2\_starter\_code/data/q2\_pg\_[-{-}exp\_name]\_[-{-}env\_name]\_[current\_time]/}.
+\end{itemize}
+
+Various other command line arguments will allow you to set batch size, learning rate, network architecture, and more. You can find list of arguments in \texttt{cas4160/scripts/run\_hw2.py:main()}.
+
+\textbf{Note}: To generate videos of the policy rollouts, add the flag ``\texttt{--video\_log\_freq 10}''. This will log the evaluation rollout for every $10$ iterations. You can watch the video in the ``\texttt{Images}'' tab on tensorboard.
+
+
+\subsection*{Deliverables for report:}
+\begin{itemize}
+  \item Create two graphs:
+  \item In the first graph, compare the learning curves (average return vs. number of environment steps) for the experiments prefixed with \texttt{cartpole} (the small batch experiments).
+  \item In the second graph, compare the learning curves for the experiments prefixed with \texttt{cartpole\_lb} (the large batch experiments).
+\end{itemize}
+
+\textbf{Note:} For all plots in this assignment, the $x$-axis should be number of environment steps, logged as Train\_EnvstepsSoFar (not number of policy gradient iterations).
+
+\textbf{Note}: You can use the example helper script (\texttt{cas4160/scripts/parse\_tensorboard.py}) to parse the data from the tensorboard logs and plot the figure. Here's an example usage that saves the figure as \texttt{output\_plot.png}:
+\begin{tcolorbox}[colback=blue!5!white,colframe=blue!75!black]
+\begin{verbatim}
+python cas4160/scripts/parse_tensorboard.py \
+  --input_log_files data/[your_log_folder_1] data/[your_log_folder_2] \
+  --human_readable_names "Vanilla" "Reward to go" \
+  --data_key "Eval_AverageReturn" \
+  --title "Your Title Here" \
+  --x_label_name "Train Environment Steps" \
+  --y_label_name "Eval Return" \
+  --output_file "output_plot.png"
+\end{verbatim}
+\end{tcolorbox}
+Note that if you add \texttt{--plot\_mean\_std} as the argument, you can plot the standard deviation as a shaded area across the \texttt{input\_log\_files} you specified.
+You can modify this parsing script for better visualization as you need.
+
+
+\subsection*{What to Expect:}
+\begin{itemize}
+  \item The best configuration of CartPole in both the large and small batch cases should converge to a maximum score of 200. In addition, each run takes about 5 minutes without video logging.
+\end{itemize}
+
+
+%% TODO: Write down your experimental setups, replace the plot with your results, and write about your analysis
+\subsection{Policy Gradient Result}
+
+\subsubsection{Plot (Eval Average Return with batch size $1000$ and $4000$):}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{assets/dummy_subplots.png}
+    \caption{\textbf{\color{red}Replace this with your plot, and add the caption.}}
+\end{figure}
+
+
+\subsubsection{Questions:}
+
+Answer the following questions briefly:
+\begin{itemize}
+    \item Which value estimator has better performance without advantage normalization: the sum of trajectory rewards (REINFORCE) or the one using reward-to-go? \\
+    \textbf{Answer:} \textbf{\color{red} Include your answer here.}
+    \item Did advantage normalization help? \\
+    \textbf{Answer:} \textbf{\color{red} Include your answer here.}
+    \item Did the batch size make an impact? \\
+    \textbf{Answer:} \textbf{\color{red} Include your answer here.}
+    \item Provide the exact command line configurations you used to run your experiments, including any parameters changed from their defaults. \\
+    \textbf{Answer:} \textbf{\color{red} Include your answer here.}
+\end{itemize}
+
+
+\section{Using a Neural Network Baseline}
+\label{sec:nn_baseline}
+
+\subsection{Implementation}
+
+You will now implement a value function as a state-dependent neural network baseline. This will require filling in some TODO sections skipped in Section \ref{sec:policy_gradient}. In particular:
+
+\begin{itemize}
+    \item This neural network will be trained in the update method of \texttt{MLPPolicyPG} along with the policy gradient update.
+    \item In \texttt{PGAgent.\_estimate\_advantage()}, the predictions of this network will be subtracted from the reward-to-go to yield an estimate of the advantage. This implements $\left(\sum_{t^{\prime}=t}^{T-1} \gamma^{t^{\prime}-t} r\left(\rvs_{i t^{\prime}}, \rva_{i t^{\prime}}\right)\right)-V_{\phi}^{\pi}\left(\rvs_{i t}\right)$.
+    \item We will train the baseline network for multiple gradient steps for each policy update, determined by the parameter \texttt{baseline\_gradient\_steps}.
+\end{itemize}
+
+\subsection{Experiments}
+\textbf{Experiment 2 (HalfCheetah).} Next, you will use your baselined policy gradient implementation to learn a controller for \texttt{HalfCheetah-v4}.
+
+Run the following commands:
+
+\begin{tcolorbox}[colback=red!5!white,colframe=red!75!black]
+\begin{verbatim}
+# No baseline
+python cas4160/scripts/run_hw2.py --env_name HalfCheetah-v4 \
+    -n 100 -b 5000 -rtg --discount 0.95 -lr 0.01 \
+    --exp_name cheetah
+# Baseline
+python cas4160/scripts/run_hw2.py --env_name HalfCheetah-v4 \
+    -n 100 -b 5000 -rtg --discount 0.95 -lr 0.01 \
+    --use_baseline -blr 0.01 -bgs 5 --exp_name cheetah_baseline    
+    \end{verbatim}
+\end{tcolorbox}
+
+
+You might notice that we omitted \texttt{-na} (normalize advantages). That's because in reality, advantage normalization is a very powerful trick, and eliminates the need for a baseline in most of the simple environments.
+
+  
+\subsection*{Deliverables:}
+\begin{itemize}
+    \item Plot a learning curve for the baseline loss.
+    \item Plot a learning curve for the eval return. 
+    \item Run another experiment with a decreased number of baseline gradient steps (\texttt{-bgs}) and/or baseline learning rate (\texttt{-blr}). How does this affect (a) the baseline learning curve and (b) the performance of the policy?
+    \item (Optional) Add \texttt{-na} back to see how much it improves things. Also, set \texttt{--video\_log\_freq 10}, then open TensorBoard and go to the ``Images'' tab to see some videos of your HalfCheetah walking along!
+\end{itemize}
+
+\subsection*{What to Expect:}
+\begin{itemize}
+  \item You should expect to achieve an average return over $300$ for the baseline version. In addition, each run takes about $10$ minutes without video logging.
+\end{itemize}
+
+
+\subsection{Neural Network Baseline Result}
+
+\subsubsection{Plot (Baseline Loss, Eval Average Return):}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{assets/dummy_subplots.png}
+    \caption{\textbf{\color{red} Replace this with your plot, and add the caption.}}
+\end{figure}
+
+
+\subsubsection{Questions:}
+
+Answer the following questions briefly:
+\begin{itemize}
+    \item Run another experiment with a decreased number of baseline gradient steps (\texttt{-bgs}) and/or baseline learning rate (\texttt{-blr}). How does this affect (a) the baseline learning curve and (b) the performance of the policy? \\
+    \textbf{Answer:} \textbf{\color{red} Include your answer here.}
+\end{itemize}
+
+
+\section{Generalized Advantage Estimator}
+\label{sec:gae}
+
+\subsection{Implementation}
+You will now use the value function you previously implemented to implement a simplified version of GAE-$\lambda$. This will require filling in the remaining TODO section in \texttt{PGAgent.\_estimate\_advantage()}.
+
+\subsection{Experiments}
+\textbf{Experiment 3 (HumanoidStandup-v5).} You will now use your implementation of policy gradient with generalized advantage estimation to learn a controller for a version of \texttt{HumanoidStandup-v5}. Search over $\lambda \in[0,0.95,1]$ to replace $\langle\lambda\rangle$ below. Do not change any of the other hyperparameters (e.g. batch size, learning rate).
+
+\begin{tcolorbox}[colback=red!5!white,colframe=red!75!black]
+    \begin{verbatim}
+python cas4160/scripts/run_hw2.py \
+    --env_name HumanoidStandup-v5 --ep_len 100 \
+    --discount 0.99 -n 50 -l 3 -s 128 -b 2000 -lr 0.001 \
+    --use_reward_to_go --use_baseline --gae_lambda <\lambda> \
+    --exp_name HumanoidStandup_lambda<\lambda>
+    \end{verbatim}
+\end{tcolorbox}
+  
+\subsection*{Deliverables:}
+\begin{itemize}
+    \item Provide a single plot with the learning curves for the \texttt{HumanoidStandup-v5} experiments that you tried. Describe in words how $\lambda$ affected task performance and training efficiency.
+    \item Consider the parameter $\lambda$. What does $\lambda=0$ correspond to? What about $\lambda=1$? Relate this to the task performance in \texttt{HumanoidStandup-v5} in one or two sentences.
+\end{itemize}
+
+\subsection*{What to Expect:}
+\begin{itemize}
+  \item The run with the best performance should achieve an average score close to $1.15e4$. In addition, each run takes about 10 minutes without video logging.
+\end{itemize}
+  
+\subsection{GAE Result}
+\subsubsection{Plot (Eval Average Return with different $\lambda$):}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{assets/dummy_plot.png}
+    \caption{\textbf{\color{red}Replace this with your plot, and add the caption. }}
+\end{figure}
+
+\subsubsection{Questions:}
+
+Answer the following questions briefly:
+\begin{itemize}
+    \item Describe in words how $\lambda$ affected task performance. \\
+    \textbf{Answer:} \textbf{\color{red}Include your answer here.}
+    \item Consider the parameter $\lambda$. What does $\lambda=0$ correspond to? What about $\lambda=1$ ? Relate this to the task performance in \texttt{HumanoidStandup-v5} in one or two sentences. \\
+    \textbf{Answer:} \textbf{\color{red}Include your answer here.}
+\end{itemize}
+
+
+\section{Proximal Policy Optimization}
+\label{sec:ppo}
+
+Finally, you are ready to implement Proximal Policy Optimization (PPO) algorithm. This algorithm uses generalized advantage estimates for calculating its surrogate advantage. There are two primary variants of PPO: PPO-Penalty and PPO-Clip. In this section, we will be implementing PPO-Clip, and its objective is defined by:
+\begin{equation*}
+L\left(\rvs, \rva, \theta_k, \theta\right)=\min \left(\frac{\pi_\theta(\rva \mid \rvs)}{\pi_{\theta_k}(\rva \mid \rvs)} A^{\pi_{\theta_k}}(\rvs, \rva), \quad \operatorname{clip}\left(\frac{\pi_\theta(\rva \mid \rvs)}{\pi_{\theta_k}(\rva \mid \rvs)}, 1-\epsilon, 1+\epsilon\right) A^{\pi_{\theta_k}}(\rvs, \rva)\right),
+\end{equation*}
+where $\theta_k$ refers to the old policy parameters before the update. 
+
+The main idea is that after an update, the new policy should be not too far from the old policy. For that, ppo uses clipping to avoid too large update. Having this form of regulation enables multiple epochs of minibatch updates with the same data, resulting in better stability and sample efficiency. If you want to know more about PPO, here is well-explained documents [\href{https://spinningup.openai.com/en/latest/algorithms/ppo.html}{OpenAI Spinning Up}, \href{https://arxiv.org/abs/1707.06347}{PPO paper}].
+
+\subsection{Implementation}
+To implement PPO, you need to fill in the TODO section in \texttt{MLPPolicyPG.ppo\_update()} and \texttt{PGAgent.update()}. Please refer to the surrogate objective defined above for calculating the loss.
+
+\subsection{Experiments}
+\textbf{Experiment 4 (Reacher-v4).} Use your implementation of PPO with generalized advantage estimation to learn a controller for \texttt{Reacher-v4}. Run the following command to run the experiment.
+
+\begin{tcolorbox}[colback=red!5!white,colframe=red!75!black]
+    \begin{verbatim}
+# Reacher (Baseline)
+python cas4160/scripts/run_hw2.py \
+    --env_name Reacher-v4 --ep_len 1000 \
+    --discount 0.99 -n 100 -b 5000 -lr 0.003 \
+    -na --use_reward_to_go --use_baseline --gae_lambda 0.97 \
+    --exp_name reacher
+# Reacher (PPO)
+python cas4160/scripts/run_hw2.py \
+    --env_name Reacher-v4 --ep_len 1000 \
+    --discount 0.99 -n 100 -b 5000 -lr 0.003 \
+    -na --use_reward_to_go --use_baseline --gae_lambda 0.97 \
+    --use_ppo --n_ppo_epochs 4 --n_ppo_minibatches 4 \
+    --exp_name reacher_ppo
+    \end{verbatim}
+\end{tcolorbox}
+
+\subsection*{Deliverables:}
+\begin{itemize}
+    \item Provide a single plot with the learning curves for the Reacher-v4 experiments that you tried. Compare the performances of the final agent with and without using PPO.
+    \item If we do not use surrogate objective and do multiple batch updates, what would happen? Justify the result.
+    \item (Optional) You can verify the above question by changing ``\texttt{actor.ppo\_update()}'' to ``\texttt{actor.update()}'' and comparing the performance. 
+\end{itemize}
+
+\subsection*{What to Expect:}
+\begin{itemize}
+  \item The run with PPO should achieve an average score close to $-10$ if correctly implemented (at least $-15$). In addition, each run takes about 14 minutes without video logging.
+\end{itemize}
+
+%% TODO: Replace the plot with your results and write down your analysis on the result  
+\subsection{PPO Result}
+\subsubsection{Plot (Eval Average Return for PPO and the baseline):}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{assets/dummy_plot.png}
+    \caption{\textbf{\color{red}Replace this with your plot, and add the caption.}}
+\end{figure}
+
+\subsubsection{Questions:} 
+
+Answer the following questions briefly:
+\begin{itemize}
+    \item If we do not use surrogate objective and do multiple batch updates, what would happen? Justify the result. \\
+    \textbf{Answer:} \textbf{\color{red}Include your answer here.}
+\end{itemize}
+
+
+
+
+\section{Submission}
+
+Please include the code, tensorboard logs data, and the \textbf{``report''}. Zip it to \texttt{hw2\_[YourStudentID].zip}. The structure of the submission file should be:
+
+\begin{forest}
+  for tree={
+    font=\ttfamily,
+    grow'=0,
+    child anchor=west,
+    parent anchor=south,
+    anchor=west,
+    calign=first,
+    edge path={
+      \noexpand\path [draw, \forestoption{edge}]
+      (!u.south west) +(7.5pt,0) |- node[fill,inner sep=1.25pt] {} (.child anchor)\forestoption{edge label};
+    },
+    before typesetting nodes={
+      if n=1
+        {insert before={[,phantom]}}
+        {}
+    },
+    fit=band,
+    before computing xy={l=15pt},
+  }
+  [{hw2\_\textcolor{red}{[YourStudentID]}.zip}
+    [{hw2\_\textcolor{red}{[YourStudentID]}.pdf}]
+    [cas4160/
+      [{...codes}]
+    ]
+    [...]
+  ]
+\end{forest}
+
+\textbf{Note: Do NOT include the videos (.mp4 files or tensorboard logs) in your submission. Your submission file size should be {\color{red} less than 50MB}.}
+
+\end{document}
