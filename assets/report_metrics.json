@@ -1,0 +1,158 @@
+{
+  "exp1_small": {
+    "Vanilla": {
+      "first_step": 1017.0,
+      "last_step": 103251.0,
+      "first_value": 27.6842098236084,
+      "last_value": 40.42856979370117,
+      "best_value": 200.0,
+      "best_step": 40335.0
+    },
+    "Reward-to-go": {
+      "first_step": 1012.0,
+      "last_step": 106735.0,
+      "first_value": 24.85714340209961,
+      "last_value": 200.0,
+      "best_value": 200.0,
+      "best_step": 21034.0
+    },
+    "Vanilla + AdvNorm": {
+      "first_step": 1018.0,
+      "last_step": 102325.0,
+      "first_value": 30.764705657958984,
+      "last_value": 200.0,
+      "best_value": 200.0,
+      "best_step": 21284.0
+    },
+    "Reward-to-go + AdvNorm": {
+      "first_step": 1007.0,
+      "last_step": 104960.0,
+      "first_value": 31.22222137451172,
+      "last_value": 164.0,
+      "best_value": 200.0,
+      "best_step": 20009.0
+    }
+  },
+  "exp1_large": {
+    "Vanilla": {
+      "first_step": 4021.0,
+      "last_step": 407133.0,
+      "first_value": 28.052631378173828,
+      "last_value": 73.42857360839844,
+      "best_value": 200.0,
+      "best_step": 141904.0
+    },
+    "Reward-to-go": {
+      "first_step": 4005.0,
+      "last_step": 407745.0,
+      "first_value": 27.157894134521484,
+      "last_value": 200.0,
+      "best_value": 200.0,
+      "best_step": 52715.0
+    },
+    "Vanilla + AdvNorm": {
+      "first_step": 4023.0,
+      "last_step": 401564.0,
+      "first_value": 38.3125,
+      "last_value": 200.0,
+      "best_value": 200.0,
+      "best_step": 60870.0
+    },
+    "Reward-to-go + AdvNorm": {
+      "first_step": 4010.0,
+      "last_step": 404187.0,
+      "first_value": 30.941177368164062,
+      "last_value": 132.75,
+      "best_value": 200.0,
+      "best_step": 64841.0
+    }
+  },
+  "exp2_eval": {
+    "No baseline": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": -736.139404296875,
+      "last_value": -155.075927734375,
+      "best_value": -122.77308654785156,
+      "best_step": 465000.0
+    },
+    "Baseline": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": -716.690185546875,
+      "last_value": -44.87303161621094,
+      "best_value": 766.0972900390625,
+      "best_step": 490000.0
+    },
+    "Baseline (reduced updates)": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": -701.1456298828125,
+      "last_value": 118.35469055175781,
+      "best_value": 161.48045349121094,
+      "best_step": 495000.0
+    }
+  },
+  "exp2_baseline_loss": {
+    "Baseline": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": 162.9189453125,
+      "last_value": 43.424556732177734,
+      "best_value": 13.791921615600586,
+      "best_step": 415000.0
+    },
+    "Baseline (reduced updates)": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": 207.14044189453125,
+      "last_value": 43.75988006591797,
+      "best_value": 16.054216384887695,
+      "best_step": 440000.0
+    }
+  },
+  "exp3": {
+    "$\\lambda=0$": {
+      "first_step": 2000.0,
+      "last_step": 100000.0,
+      "first_value": 3571.7919921875,
+      "last_value": 4874.13232421875,
+      "best_value": 5075.79736328125,
+      "best_step": 76000.0
+    },
+    "$\\lambda=0.95$": {
+      "first_step": 2000.0,
+      "last_step": 100000.0,
+      "first_value": 3622.629150390625,
+      "last_value": 9916.0556640625,
+      "best_value": 9916.0556640625,
+      "best_step": 100000.0
+    },
+    "$\\lambda=1$": {
+      "first_step": 2000.0,
+      "last_step": 100000.0,
+      "first_value": 3518.450927734375,
+      "last_value": 5310.77734375,
+      "best_value": 5310.77734375,
+      "best_step": 100000.0
+    }
+  },
+  "exp4": {
+    "Baseline": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": -120.77111053466797,
+      "last_value": -68.50128173828125,
+      "best_value": -68.50128173828125,
+      "best_step": 500000.0
+    },
+    "PPO": {
+      "first_step": 5000.0,
+      "last_step": 500000.0,
+      "first_value": -108.59634399414062,
+      "last_value": -7.528180122375488,
+      "best_value": -7.528180122375488,
+      "best_step": 500000.0
+    }
+  }
+}
